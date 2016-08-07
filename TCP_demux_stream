@@ -1,0 +1,102 @@
+#!/usr/bin/python
+
+# 用法：./pcap-parser_3.py test.pcap www.baidu.com
+import sys
+import socket
+import struct
+
+filename = sys.argv[1]
+file = open(filename, "rb") 
+
+pcaphdrlen = 24
+pkthdrlen=16
+linklen=14
+iphdrlen=20
+tcphdrlen=20
+stdtcp = 20
+
+files4out = {}
+
+# Read 24-bytes pcap header
+datahdr = file.read(pcaphdrlen)
+(tag, maj, min, tzone, ts, ppsize, lt) = struct.unpack("=L2p2pLLLL", datahdr)
+
+# 判断链路层是Cooked还是别的
+if lt == 0x71:
+	linklen = 16
+else:
+	linklen = 14
+
+# Read 16-bytes packet header
+data = file.read(pkthdrlen)
+
+while data:
+	ipsrc_tag = 0
+	ipdst_tag = 0
+	sport_tag = 0
+	dport_tag = 0
+
+	(sec, microsec, iplensave, origlen) = struct.unpack("=LLLL", data)
+
+	# read link
+	link = file.read(linklen)
+	
+	# read IP header
+	ipdata = file.read(iphdrlen)
+	(vl, tos, tot_len, id, frag_off, ttl, protocol, check, saddr, daddr) = struct.unpack(">ssHHHssHLL", ipdata)
+	iphdrlen = ord(vl) & 0x0F 
+	iphdrlen *= 4
+
+	# read TCP standard header
+	tcpdata = file.read(stdtcp)	
+	(sport, dport, seq, ack_seq, pad1, win, check, urgp) = struct.unpack(">HHLLHHHH", tcpdata)
+	tcphdrlen = pad1 & 0xF000
+	tcphdrlen = tcphdrlen >> 12
+	tcphdrlen = tcphdrlen*4
+
+	# skip data
+	skip = file.read(iplensave-linklen-iphdrlen-stdtcp)
+
+	print socket.inet_ntoa(struct.pack('i',socket.htonl(saddr)))
+	src_tag = socket.inet_ntoa(struct.pack('i',socket.htonl(saddr)))
+	dst_tag = socket.inet_ntoa(struct.pack('i',socket.htonl(daddr)))
+	sp_tag = str(sport)
+	dp_tag = str(dport)
+
+	# 此即将四元组按照固定顺序排位，两个方向变成一个方向，保证四元组的唯一性
+	if saddr > daddr:
+		temp = dst_tag
+		dst_tag = src_tag
+		src_tag = temp
+	if sport > dport:
+		temp = sp_tag
+		sp_tag = dp_tag
+		dp_tag = temp
+	
+	name = src_tag + '_' + dst_tag + '_' + sp_tag + '_' + dp_tag
+	
+	if (name) in files4out:
+		file_out = files4out[name]
+		file_out.write(data)
+		file_out.write(link)
+		file_out.write(ipdata)
+		file_out.write(tcpdata)
+		file_out.write(skip)
+		files4out[name] = file_out
+	else:
+		file_out = open(name+'.pcap', "wb")
+		file_out.write(datahdr)
+		file_out.write(data)
+		file_out.write(link)
+		file_out.write(ipdata)
+		file_out.write(tcpdata)
+		file_out.write(skip)
+		files4out[name] = file_out
+
+	# read next packet
+	data = file.read(pkthdrlen)
+
+file.close
+for file_out in files4out.values():
+	file_out.close()
+
